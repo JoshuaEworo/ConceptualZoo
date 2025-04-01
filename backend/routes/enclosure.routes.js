@@ -6,16 +6,26 @@ const { authenticateToken } = require('../middleware/auth.middleware');
 module.exports = (pool) => {
   // Get all enclosures
   router.get('/', async (req, res) => {
-    try {
-      // TODO: Implement getting all enclosures
-      const [rows] = await pool.query('SELECT * FROM enclosures'); // done
-      
-      res.json(rows); // return all enclosures
-    } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: 'Failed to fetch enclosures: ' + err.message });
-    }
-  });
+  try {
+    const [rows] = await pool.query('SELECT * FROM enclosures');
+    
+    // Convert ImageData BLOB to Base64 string
+    const enclosures = rows.map(enclosure => {
+      if (enclosure.ImageData) {
+        // Convert Buffer -> Base64
+        const base64Image = enclosure.ImageData.toString('base64');
+        // Optional: store it in a separate field
+        enclosure.ImageData = base64Image;
+      }
+      return enclosure;
+    });
+
+    res.json(enclosures);
+  } catch (err) {
+    console.error('Error fetching enclosures:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
   
   // Get enclosure by ID
   router.get('/:id', async (req, res) => {
@@ -102,6 +112,21 @@ module.exports = (pool) => {
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'Failed to fetch enclosures for staff member: ' + err.message });
+    }
+  });
+
+  //Get enclosures by type
+  router.get('/type/:type', async (req, res) => {
+    const { type } = req.params;
+    try {
+      const [rows] = await pool.query(
+        'SELECT * FROM zoodb.enclosures WHERE Type = ?',
+        [type]
+      );
+      return res.json(rows);
+    } catch (err) {
+      console.error('Error fetching enclosures by type:', err);
+      return res.status(500).json({ error: 'Server error' });
     }
   });
   
@@ -251,7 +276,7 @@ module.exports = (pool) => {
       res.json({ message: `This endpoint will assign staff ${Staff} to enclosure ${enclosureId}` });
     } catch (err) {
       console.error(err);
-      res.status(500).json({ error: 'Failed to delete enclosure' });
+      res.status(500).json({ error: 'Failed to fetch staff assigned to enclosure' });
     }
     
   });
