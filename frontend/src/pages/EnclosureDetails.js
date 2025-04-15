@@ -3,6 +3,7 @@ import React, { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import axios from "axios";
 import AnimalCard from "../components/AnimalCard";
+import StaffCard from '../components/StaffCard';
 import { useParams } from 'react-router-dom'; // Import useParams
 
 
@@ -15,6 +16,9 @@ const EnclosureDetails = () => {
   const [enclosureList, setEnclosureList] = useState([]); // preload enclosures for dropdown
   const [assignedEnclosures, setAssignedEnclosures] = useState([]); // for zookeepers
   const [selectedEnclosure, setSelectedEnclosure] = useState(null); // fetch enclosure details
+  const [zookeepers, setZookeepers] = useState([]); // for list of Zookeepers to put in change of enclosure
+  const [activeView, setActiveView] = useState("animals") // view animal or staff in an enclosure. 
+  const [assignedStaff, setAssignedStaff] = useState([]); // staff that work at enclosures
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -29,6 +33,8 @@ const EnclosureDetails = () => {
     Type: "",
     Capacity: "",
     Location: "",
+    ImageURL: "",     
+    Description: "",
   });
 
   // Modified first useEffect
@@ -39,11 +45,12 @@ const EnclosureDetails = () => {
       try {
         setLoading(true);
         let endpoint = '/api/enclosures';
-        
+        /*
         // If user is a zookeeper, get their assigned enclosures
         if (currentUser.staffType === 'Zookeeper') {
           endpoint = `/api/enclosures/staff/${currentUser.id}`;
         }
+          */
         
         const response = await axios.get(endpoint, {
           headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
@@ -51,11 +58,13 @@ const EnclosureDetails = () => {
         
         setAssignedEnclosures(response.data);
         
+        /*
         // If enclosure ID was in URL, we've already triggered loadEnclosure, 
         // so we don't need to auto-select the first one
-        if (!urlEnclosureId && response.data.length > 0 && currentUser.staffType === 'Zookeeper') {
+        if (!urlEnclosureId && response.data.length > 0 && currentUser.staffType === 'Zookeeper' || currentUser.staffType === 'Vet') {
           loadEnclosure(response.data[0].EnclosureID);
         }
+          */
         
         setError(null);
       } catch (err) {
@@ -90,10 +99,32 @@ const EnclosureDetails = () => {
       }
     };
     
-    if (currentUser && currentUser.staffRole === "Manager") {
+    if (currentUser && (currentUser.staffRole === "Manager" || currentUser.staffType === "Zookeeper" ||
+      currentUser.staffType === "Vet")) {
       fetchEnclosures();
     }
   }, [currentUser]);
+
+  // Fetch the zookeeper staff 
+  useEffect (() => {
+    
+    const fetchZookeepers = async () => {
+      try {
+        const response = await axios.get('/api/staff/zookeepers', {
+          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+        });
+        console.log("Fetched zookeepers:", response.data);
+
+        setZookeepers(response.data);
+      } catch (err) {
+        console.error("Error fetching zookeepers:", err);
+      }
+    };
+    
+
+    //setZookeepers(ZOOKEEPERS);  
+    fetchZookeepers();
+  }, []);
 
   // load enclosure by its ID
   const loadEnclosure = async (id) => {
@@ -119,6 +150,12 @@ const EnclosureDetails = () => {
       
       setSelectedEnclosure(enclosureWithAnimals);
 
+      // new code
+      const staffRes = await axios.get(`/api/enclosures/${id}/assigned-staff`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("token")}` }
+      });
+      setAssignedStaff(staffRes.data);
+
       // fill form data
       setFormData({
         StaffID: response.data.StaffID || "",
@@ -126,6 +163,8 @@ const EnclosureDetails = () => {
         Type: response.data.Type || "",
         Capacity: response.data.Capacity || "",
         Location: response.data.Location || "",
+        ImageURL: response.data.ImageURL || "",
+        Description: response.data.Description || "",
       });
       
       setIsEditing(false);
@@ -152,9 +191,11 @@ const EnclosureDetails = () => {
 
   // handle changes in form inputs
   const handleChange = (e) => {
+    //const {name, value} = e.target;
     setFormData({
       ...formData,
       [e.target.name]: e.target.value,
+      //[name]: name === "StaffID" ? parseInt(value) : value,
     });
   };
 
@@ -209,11 +250,23 @@ const EnclosureDetails = () => {
         }
       );
 
+      // Re-fetch the updated enclosure to get the updated server-side data
+      const updatedResponse = await axios.get(
+        `/api/enclosures/${selectedEnclosure.EnclosureID}`,
+        { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } }
+      );
+      // Find the updated zookeeper's name based on the new StaffID
+      const updatedZookeeper = zookeepers.find(
+        (z) => z.Staff === parseInt(formData.StaffID)
+      );
+
       // Update the local state with the new data
-      setSelectedEnclosure({ 
-        ...selectedEnclosure, 
-        ...formData 
-      });
+      setSelectedEnclosure((prev) => ({
+        ...updatedResponse.data,
+        ...formData,
+        // get updated zookeeper lead, if there is a new one 
+        ZookeeperName: updatedZookeeper ? updatedZookeeper.Name : prev.ZookeeperName,
+      }));
       
       setIsEditing(false);
       alert("Enclosure updated successfully");
@@ -238,12 +291,21 @@ const EnclosureDetails = () => {
       const response = await axios.post(`/api/enclosures`, formData, {
         headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
       });
-      
-      // Construct a new enclosure object using the returned EnclosureID
+
+      // Get new enclosure id from post response and fetch the details of the newly added enclosure
+      const newID = response.data.EnclosureID; 
+      const fullResponse = await axios.get(`/api/enclosures/${newID}`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
+      });
+
+      // Find the Zookeeper's name for display
+      const newZookeeper = zookeepers.find(z => z.Staff === parseInt(formData.StaffID));
+
+      // Construct a new enclosure object using the returned EnclosureID and Zookeeper
       const newEnclosure = {
-        ...formData,
-        EnclosureID: response.data.EnclosureID,
-        Animals: [] // Initialize with empty animals array
+        ...fullResponse.data,
+        Animals: [], // Initialize with empty animals array
+        ZookeeperName: newZookeeper ? newZookeeper.Name : "Unknown"
       };
       
       setSelectedEnclosure(newEnclosure); // Set the new enclosure as the current one
@@ -306,7 +368,7 @@ const EnclosureDetails = () => {
     }
   };
 
-  console.log(currentUser)
+  
   return (
     <div className="bg-gray-100 min-h-screen pt-20">
       <div className="container mx-auto px-4 py-12">
@@ -315,11 +377,11 @@ const EnclosureDetails = () => {
         </h1>
         
         {/* Different UI based on user role */}
-        {currentUser?.staffType === 'Zookeeper' && currentUser.staffRole === "Staff" ? (
+        {((currentUser?.staffType === 'Zookeeper' && currentUser.staffRole === "Staff") || currentUser?.staffType === 'Vet') ? (
           // Zookeeper Interface - Dropdown of assigned enclosures
           <div className="mb-6">
             <label className="block text-sm font-medium text-gray-700 mb-2 font-['Mukta_Mahee']">
-              Select Your Assigned Enclosure:
+              Select An Assigned Enclosure:
             </label>
             <select
               className="border border-gray-300 p-2 rounded w-full md:w-64 font-['Mukta_Mahee']"
@@ -327,14 +389,14 @@ const EnclosureDetails = () => {
               onChange={handleEnclosureSelect}
             >
               <option value="">Select an enclosure</option>
-              {assignedEnclosures.map(enclosure => (
+              {enclosureList.map(enclosure => (
                 <option key={enclosure.EnclosureID} value={enclosure.EnclosureID}>
                   {enclosure.Name} (ID: {enclosure.EnclosureID})
                 </option>
               ))}
             </select>
             
-            {assignedEnclosures.length === 0 && !loading && (
+            {enclosureList.length === 0 && !loading && (
               <p className="mt-2 text-amber-600 font-['Lora']">
                 You don't have any assigned enclosures.
               </p>
@@ -419,18 +481,26 @@ const EnclosureDetails = () => {
             </h2>
             <form onSubmit={handleAdd}>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+
+                {/* Dropdown to select a Zookeeper */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1 font-['Mukta_Mahee']">
-                    Staff ID
+                    Enclosure Lead
                   </label>
-                  <input
-                    type="text"
-                    name="StaffID"
-                    value={formData.StaffID}
-                    onChange={handleChange}
-                    className="w-full border border-gray-300 p-2 rounded font-['Mukta_Mahee']"
-                    required
-                  />
+                  <select
+                     name="StaffID"
+                     value={formData.StaffID}
+                     onChange={handleChange}
+                     className="w-full border border-gray-300 p-2 rounded font-['Mukta_Mahee']"
+                     required
+                  >
+                    <option value="">Select Zookeeper for Enclosure Lead</option>
+                    {zookeepers.map(zookeeper => (
+                      <option key={zookeeper.Staff} value={zookeeper.Staff}>
+                        {zookeeper.Name} (ID: {zookeeper.Staff})
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 
                 <div>
@@ -494,6 +564,35 @@ const EnclosureDetails = () => {
                     required
                   />
                 </div>
+                
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1 font-['Mukta_Mahee']">
+                    Image URL
+                  </label>
+                  <input 
+                    type="text"
+                    name="ImageURL"
+                    value={formData.ImageURL}
+                    onChange={handleChange}
+                    className="w-full border border-gray-300 p-2 rounded font-['Mukta_Mahee']"
+                    placeholder="Enter image URL"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 font-['Mukta_Mahee']">
+                    Description
+                  </label>
+                  <textarea 
+                    name="Description"
+                    value={formData.Description}
+                    onChange={handleChange}
+                    rows={3}
+                    className="w-full border border-gray-300 p-2 rounded font-['Mukta_Mahee']"
+                    placeholder="Enter a description for the enclosure"
+                  />
+                </div>
+
               </div>
               
               <div className="flex space-x-2">
@@ -525,16 +624,22 @@ const EnclosureDetails = () => {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1 font-['Mukta_Mahee']">
-                    Staff ID
+                    Enclosure Lead
                   </label>
-                  <input
-                    type="text"
-                    name="StaffID"
-                    value={formData.StaffID}
-                    onChange={handleChange}
-                    className="w-full border border-gray-300 p-2 rounded font-['Mukta_Mahee']"
-                    required
-                  />
+                  <select
+                     name="StaffID"
+                     value={formData.StaffID}
+                     onChange={handleChange}
+                     className="w-full border border-gray-300 p-2 rounded font-['Mukta_Mahee']"
+                     required
+                  >
+                    <option value="">Select Zookeeper for Enclosure Lead</option>
+                    {zookeepers.map(zookeeper => (
+                      <option key={zookeeper.Staff} value={zookeeper.Staff}>
+                        {zookeeper.Name} (ID: {zookeeper.Staff})
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 
                 <div>
@@ -598,8 +703,38 @@ const EnclosureDetails = () => {
                     required
                   />
                 </div>
+
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1 font-['Mukta_Mahee']">
+                    Image URL
+                  </label>
+                  <input
+                    type="text"
+                    name="ImageURL"
+                    value={formData.ImageURL}
+                    onChange={handleChange}
+                    className="w-full border border-gray-300 p-2 rounded font-['Mukta_Mahee']"
+                    placeholder="Enter image URL"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 font-['Mukta_Mahee']">
+                    Description
+                  </label>
+                  <textarea
+                    name="Description"
+                    value={formData.Description}
+                    onChange={handleChange}
+                    rows={3}
+                    className="w-full border border-gray-300 p-2 rounded font-['Mukta_Mahee']"
+                    placeholder="Enter a description for the enclosure"
+                    required
+                  />
+                </div>
               </div>
-              
+                            
               <div className="flex space-x-2">
                 <button
                   type="submit"
@@ -646,9 +781,33 @@ const EnclosureDetails = () => {
                       <td className="py-2 pr-4 font-semibold font-['Mukta_Mahee']">Capacity:</td>
                       <td className="py-2 font-['Lora']">{selectedEnclosure.Capacity}</td>
                     </tr>
-                    <tr>
+                    <tr className="border-b">
                       <td className="py-2 pr-4 font-semibold font-['Mukta_Mahee']">Location:</td>
                       <td className="py-2 font-['Lora']">{selectedEnclosure.Location}</td>
+                    </tr>
+                    <tr className="border-b">
+                      <td className="py-2 pr-4 font-semibold font-['Mukta_Mahee']">Enclosure Lead:</td>
+                      <td className="py-2 font-['Lora']">{selectedEnclosure.ZookeeperName}</td>
+                    </tr>
+                    <tr className="border-b">
+                      <td className="py-2 pr-4 font-semibold font-['Mukta_Mahee']">Image:</td>
+                      <td className="py-2 font-['Lora']">
+                        {selectedEnclosure.ImageURL ? (
+                          <img 
+                            src={selectedEnclosure.ImageURL} 
+                            alt={selectedEnclosure.Name} 
+                            className="max-w-xs rounded"
+                          />
+                        ) : (
+                          <span className="text-gray-500">No image provided</span>
+                        )}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="py-2 pr-4 font-semibold font-['Mukta_Mahee']">Description:</td>
+                      <td className="py-2 font-['Lora']">
+                        {selectedEnclosure.Description || <span className="text-gray-500">No description provided</span>}
+                      </td>
                     </tr>
                   </tbody>
                 </table>
@@ -679,7 +838,46 @@ const EnclosureDetails = () => {
               </div>
             </div>
             
-            {/* Animal cards section */}
+            {/* buttons to select */}
+            <div className="flex space-x-2 mb-4">
+              <button 
+                onClick={() => setActiveView("animals")} 
+                className={`px-4 py-2 rounded ${activeView === "animals" ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-800'} font-['Mukta_Mahee']`}              >
+                View Animals
+              </button>
+              <button
+                onClick={() => setActiveView("staff")}
+                className={`px-4 py-2 rounded ${activeView === "staff" ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-800'} font-['Mukta_Mahee']`}              >
+                View Staff
+              </button>
+            </div>
+
+            {/* conditional display for animals or staff */}
+            {activeView === "staff" ? (
+              assignedStaff.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {assignedStaff.map((staff) => (
+                    <StaffCard key={staff.StaffID} staff={staff} />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-gray-500 py-4 font-['Lora']">No staff assigned to this enclosure.</p>
+              )
+            ) : (
+              selectedEnclosure.Animals && selectedEnclosure.Animals.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {selectedEnclosure.Animals.map(animal => (
+                    <AnimalCard key={animal.AnimalID} animal={animal} />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-gray-500 py-4 font-['Lora']">No animals are currently assigned to this enclosure.</p>
+              )
+            )}
+
+            
+            
+            {/* Animal cards section. come back later if abive code doesnt work. 
             <h3 className="text-xl font-semibold mb-4 font-['Roboto_Flex']">
               Animals in this Enclosure
             </h3>
@@ -693,6 +891,7 @@ const EnclosureDetails = () => {
             ) : (
               <p className="text-gray-500 py-4 font-['Lora']">No animals are currently assigned to this enclosure.</p>
             )}
+            */}
           </div>
         )}
 
